@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   CheckCircle,
@@ -10,6 +10,15 @@ import {
 import { useCart } from '../context/CartContext';
 import { orderService } from '../services/orderService';
 import { useAuth } from '../context/AuthContext';
+
+const formatMoney = (value) => {
+  const amount = Number(value || 0);
+
+  return `₹${amount.toLocaleString('en-IN', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  })}`;
+};
 
 const Checkout = () => {
   const {
@@ -35,29 +44,36 @@ const Checkout = () => {
     city: '',
     state: '',
     pincode: '',
-    paymentMethod: 'upi'
+    paymentMethod: 'cod'
   });
 
   const [isProcessing, setIsProcessing] = useState(false);
   const [orderComplete, setOrderComplete] = useState(false);
   const [orderId, setOrderId] = useState(null);
+  const [error, setError] = useState('');
 
-  const subtotal = getCartTotal();
+  const items = Array.isArray(cartItems) ? cartItems : [];
 
+  const subtotal = Number(getCartTotal() || 0);
+
+  // Must match backend orderController.js
   const deliveryFee =
-    subtotal > 0 && subtotal < 100 ? 20 : 0;
+    subtotal > 0 && subtotal <= 500 ? 50 : 0;
 
   const total = subtotal + deliveryFee;
 
-  if (cartItems.length === 0 && !orderComplete) {
-    navigate('/cart');
-    return null;
-  }
-
-  if (!isUserAuthenticated) {
-    navigate('/login');
-    return null;
-  }
+  useEffect(() => {
+    if (!isUserAuthenticated) {
+      navigate('/login', { replace: true });
+    } else if (items.length === 0 && !orderComplete) {
+      navigate('/cart', { replace: true });
+    }
+  }, [
+    isUserAuthenticated,
+    items.length,
+    orderComplete,
+    navigate
+  ]);
 
   const handleInputChange = (e) => {
     const { name, value } = e.target;
@@ -66,55 +82,73 @@ const Checkout = () => {
       ...prev,
       [name]: value
     }));
+
+    setError('');
   };
 
   const handleSubmitAddress = (e) => {
     e.preventDefault();
 
     if (
-      formData.name &&
-      formData.email &&
-      formData.address &&
-      formData.pincode
+      formData.name.trim() &&
+      formData.email.trim() &&
+      formData.phone.trim() &&
+      formData.address.trim() &&
+      formData.city.trim() &&
+      formData.state.trim() &&
+      formData.pincode.trim()
     ) {
       setStep(2);
+      setError('');
     }
   };
 
   const handlePlaceOrder = async () => {
+    if (isProcessing) return;
+
+    if (formData.paymentMethod !== 'cod') {
+      setError(
+        'Online payment is not connected yet. Please select Cash on Delivery for the demo.'
+      );
+      return;
+    }
+
     setIsProcessing(true);
+    setError('');
 
     try {
       const orderData = {
-        total_amount: total,
-
         shipping_address:
           `${formData.address}, ${formData.city}, ` +
           `${formData.state} - ${formData.pincode}`,
 
-        payment_method: formData.paymentMethod,
+        payment_method: 'cod',
 
-        items: cartItems.map(item => ({
-          product_id: item.product_id,
-          quantity: item.quantity,
-          unit_price: item.unit_price,
-          item_type: item.item_type
+        items: items.map(item => ({
+          product_id: item.product_id || item.id,
+          quantity: Number(item.quantity),
+          unit_price: Number(item.unit_price || 0),
+          item_type: item.item_type || 'trial'
         }))
       };
 
       const res = await orderService.createOrder(orderData);
 
-      setOrderId(res.data.order_id);
+      const createdOrder = res?.data || {};
+
+      setOrderId(
+        createdOrder.order_id || createdOrder.id || null
+      );
 
       setOrderComplete(true);
 
       await clearCart();
 
-    } catch (error) {
-      console.error('Error creating order:', error);
+    } catch (err) {
+      console.error('Error creating order:', err);
 
-      alert(
-        error.response?.data?.message ||
+      setError(
+        err.response?.data?.message ||
         'Failed to create order. Please try again.'
       );
 
@@ -123,23 +157,42 @@ const Checkout = () => {
     }
   };
 
+  if (!isUserAuthenticated) {
+    return null;
+  }
+
+  if (items.length === 0 && !orderComplete) {
+    return null;
+  }
+
   if (orderComplete) {
     return (
       <div className="min-h-screen bg-gray-50 flex flex-col items-center justify-center p-4 py-12">
 
-        <div className="bg-white p-10 rounded-3xl shadow-xl text-center max-w-lg w-full border border-gray-100 animate-fade-in-up">
+        <div className="bg-white p-10 rounded-3xl shadow-xl text-center max-w-lg w-full border border-gray-100">
 
           <div className="w-24 h-24 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6">
             <CheckCircle className="h-12 w-12 text-green-500" />
           </div>
 
           <h2 className="text-3xl font-extrabold text-gray-900 mb-4">
-            Trial Request Confirmed!
+            Order Confirmed!
           </h2>
 
-          <p className="text-gray-600 mb-8 text-lg">
-            Thank you, {formData.name}. Your trial products will
-            be delivered in 2-3 days. Order ID: #{orderId}
+          <p className="text-gray-600 mb-4 text-lg">
+            Thank you, {formData.name}. Your order has been
+            saved successfully.
+          </p>
+
+          {orderId && (
+            <p className="text-gray-700 font-semibold mb-4">
+              Order ID: #{orderId}
+            </p>
+          )}
+
+          <p className="text-sm text-gray-500 mb-8">
+            Payment Status: Pending (Cash on Delivery).
+            This is a demo project; actual delivery is not arranged.
           </p>
 
           <div className="flex flex-col gap-3">
@@ -177,16 +230,15 @@ const Checkout = () => {
 
           <div className="lg:w-2/3">
 
+            {/* Checkout Steps */}
             <div className="flex items-center mb-8 bg-white p-4 rounded-xl shadow-sm border border-gray-100">
 
-              <div className={`flex items-center ${step >= 1
-                  ? 'text-primary'
-                  : 'text-gray-400'
+              <div className={`flex items-center ${step >= 1 ? 'text-primary' : 'text-gray-400'
                 }`}>
 
                 <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${step >= 1
-                    ? 'bg-primary text-white'
-                    : 'bg-gray-200'
+                  ? 'bg-primary text-white'
+                  : 'bg-gray-200'
                   }`}>
                   1
                 </div>
@@ -197,20 +249,15 @@ const Checkout = () => {
 
               </div>
 
-              <div className={`flex-1 h-1 mx-4 rounded ${step >= 2
-                  ? 'bg-primary'
-                  : 'bg-gray-200'
-                }`}>
-              </div>
+              <div className={`flex-1 h-1 mx-4 rounded ${step >= 2 ? 'bg-primary' : 'bg-gray-200'
+                }`} />
 
-              <div className={`flex items-center ${step >= 2
-                  ? 'text-primary'
-                  : 'text-gray-400'
+              <div className={`flex items-center ${step >= 2 ? 'text-primary' : 'text-gray-400'
                 }`}>
 
                 <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${step >= 2
-                    ? 'bg-primary text-white'
-                    : 'bg-gray-200'
+                  ? 'bg-primary text-white'
+                  : 'bg-gray-200'
                   }`}>
                   2
                 </div>
@@ -223,6 +270,7 @@ const Checkout = () => {
 
             </div>
 
+            {/* Address Form */}
             {step === 1 && (
               <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 sm:p-8 mb-6">
 
@@ -246,7 +294,7 @@ const Checkout = () => {
                         value={formData.name}
                         onChange={handleInputChange}
                         className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-primary focus:border-primary"
-                        placeholder="John Doe"
+                        placeholder="Full Name"
                       />
                     </div>
 
@@ -278,7 +326,7 @@ const Checkout = () => {
                         value={formData.email}
                         onChange={handleInputChange}
                         className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-primary focus:border-primary"
-                        placeholder="john@example.com"
+                        placeholder="you@example.com"
                       />
                     </div>
 
@@ -295,8 +343,7 @@ const Checkout = () => {
                         rows="3"
                         className="w-full px-4 py-3 border border-gray-300 rounded-xl focus:ring-primary focus:border-primary"
                         placeholder="House/Flat No, Building, Street, Area"
-                      >
-                      </textarea>
+                      />
                     </div>
 
                     <div>
@@ -358,8 +405,9 @@ const Checkout = () => {
               </div>
             )}
 
+            {/* Payment Methods */}
             {step === 2 && (
-              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 sm:p-8 mb-6 animate-fade-in-up">
+              <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 sm:p-8 mb-6">
 
                 <div className="flex justify-between items-center mb-6">
 
@@ -368,6 +416,7 @@ const Checkout = () => {
                   </h2>
 
                   <button
+                    type="button"
                     onClick={() => setStep(1)}
                     className="text-sm font-medium text-primary"
                   >
@@ -378,9 +427,10 @@ const Checkout = () => {
 
                 <div className="space-y-4 mb-8">
 
+                  {/* UPI */}
                   <label className={`block p-4 border rounded-xl cursor-pointer transition-colors ${formData.paymentMethod === 'upi'
-                      ? 'border-primary bg-primary/5 ring-1 ring-primary'
-                      : 'border-gray-200 hover:border-gray-300'
+                    ? 'border-primary bg-primary/5 ring-1 ring-primary'
+                    : 'border-gray-200 hover:border-gray-300'
                     }`}>
 
                     <div className="flex items-center">
@@ -400,11 +450,16 @@ const Checkout = () => {
 
                     </div>
 
+                    <p className="text-xs text-gray-500 ml-8 mt-2">
+                      Coming soon — payment gateway not connected.
+                    </p>
+
                   </label>
 
+                  {/* Card */}
                   <label className={`block p-4 border rounded-xl cursor-pointer transition-colors ${formData.paymentMethod === 'card'
-                      ? 'border-primary bg-primary/5 ring-1 ring-primary'
-                      : 'border-gray-200 hover:border-gray-300'
+                    ? 'border-primary bg-primary/5 ring-1 ring-primary'
+                    : 'border-gray-200 hover:border-gray-300'
                     }`}>
 
                     <div className="flex items-center">
@@ -425,11 +480,16 @@ const Checkout = () => {
 
                     </div>
 
+                    <p className="text-xs text-gray-500 ml-8 mt-2">
+                      Coming soon — payment gateway not connected.
+                    </p>
+
                   </label>
 
+                  {/* COD */}
                   <label className={`block p-4 border rounded-xl cursor-pointer transition-colors ${formData.paymentMethod === 'cod'
-                      ? 'border-primary bg-primary/5 ring-1 ring-primary'
-                      : 'border-gray-200 hover:border-gray-300'
+                    ? 'border-primary bg-primary/5 ring-1 ring-primary'
+                    : 'border-gray-200 hover:border-gray-300'
                     }`}>
 
                     <div className="flex items-center">
@@ -450,6 +510,10 @@ const Checkout = () => {
 
                     </div>
 
+                    <p className="text-xs text-gray-500 ml-8 mt-2">
+                      Demo order — no online payment collected.
+                    </p>
+
                   </label>
 
                 </div>
@@ -459,20 +523,33 @@ const Checkout = () => {
                   <ShieldCheck className="h-6 w-6 text-green-500 mr-3 flex-shrink-0" />
 
                   <p className="text-sm text-gray-600">
-                    Payments are secure and encrypted.
-                    We do not store your card details.
+                    Online payments are not enabled yet.
+                    Do not enter card or UPI credentials.
+                    COD demo orders remain unpaid.
                   </p>
 
                 </div>
 
+                {error && (
+                  <div className="mb-6 p-4 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm">
+                    {error}
+                  </div>
+                )}
+
                 <button
+                  type="button"
                   onClick={handlePlaceOrder}
-                  disabled={isProcessing}
-                  className="w-full bg-gray-900 hover:bg-black text-white font-bold py-4 px-6 rounded-xl transition-all shadow-lg flex items-center justify-center disabled:opacity-70"
+                  disabled={
+                    isProcessing ||
+                    formData.paymentMethod !== 'cod'
+                  }
+                  className="w-full bg-gray-900 hover:bg-black text-white font-bold py-4 px-6 rounded-xl transition-all shadow-lg flex items-center justify-center disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   {isProcessing
                     ? 'Processing...'
-                    : `Pay $${total.toFixed(2)} & Confirm Trial`
+                    : formData.paymentMethod === 'cod'
+                      ? `Place COD Order — ${formatMoney(total)}`
+                      : 'Online Payment Coming Soon'
                   }
                 </button>
 
@@ -481,6 +558,7 @@ const Checkout = () => {
 
           </div>
 
+          {/* Order Summary */}
           <div className="lg:w-1/3">
 
             <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-6 sticky top-24">
@@ -493,7 +571,7 @@ const Checkout = () => {
 
                 <ul className="divide-y divide-gray-100">
 
-                  {cartItems.map((item, index) => (
+                  {items.map((item, index) => (
                     <li
                       key={item.cart_item_id || index}
                       className="py-3 flex justify-between"
@@ -512,11 +590,10 @@ const Checkout = () => {
                       </div>
 
                       <span className="text-sm font-medium text-gray-900">
-                        $
-                        {(
-                          parseFloat(item.unit_price || 0) *
+                        {formatMoney(
+                          Number(item.unit_price || 0) *
                           Number(item.quantity || 0)
-                        ).toFixed(2)}
+                        )}
                       </span>
 
                     </li>
@@ -533,7 +610,7 @@ const Checkout = () => {
                   <span>Subtotal</span>
 
                   <span className="font-medium text-gray-900">
-                    ${subtotal.toFixed(2)}
+                    {formatMoney(subtotal)}
                   </span>
 
                 </div>
@@ -545,7 +622,7 @@ const Checkout = () => {
                   <span className="font-medium text-gray-900">
                     {deliveryFee === 0
                       ? 'Free'
-                      : `$${deliveryFee.toFixed(2)}`
+                      : formatMoney(deliveryFee)
                     }
                   </span>
 
@@ -560,7 +637,7 @@ const Checkout = () => {
                 </span>
 
                 <span className="text-2xl font-black text-primary">
-                  ${total.toFixed(2)}
+                  {formatMoney(total)}
                 </span>
 
               </div>
