@@ -265,16 +265,16 @@ const getOrderById = async (req, res, next) => {
 
 
 // Get all orders - Admin
-const getAllOrdersAdmin = async (
-  req,
-  res,
-  next
-) => {
+const getAllOrdersAdmin = async (req, res, next) => {
   try {
     const result = await db.query(
-      `SELECT *
-       FROM orders
-       ORDER BY created_at DESC`
+      `SELECT
+         o.*,
+         u.full_name AS user_name
+       FROM orders o
+       LEFT JOIN users u
+         ON u.id = o.user_id
+       ORDER BY o.created_at DESC`
     );
 
     res.json({
