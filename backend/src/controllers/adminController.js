@@ -90,7 +90,6 @@ const getAdminDashboard = async (req, res, next) => {
         pending_orders: stats.pending_orders,
         total_revenue: Number(stats.total_revenue),
 
-        // These detailed lists can be connected separately.
         recent_orders: [],
         recent_trial_requests: [],
         low_stock_products: []
@@ -107,9 +106,10 @@ const getAdminDashboard = async (req, res, next) => {
 const getUsers = async (req, res, next) => {
   try {
     const result = await db.query(
-      `SELECT id, full_name, email, phone, role, created_at, status
+      `SELECT id, full_name, email, phone, role, created_at
        FROM users
-       WHERE role = $1`,
+       WHERE role = $1
+       ORDER BY created_at DESC`,
       ['user']
     );
 
@@ -128,7 +128,7 @@ const getUsers = async (req, res, next) => {
 const getUserById = async (req, res, next) => {
   try {
     const result = await db.query(
-      `SELECT id, full_name, email, phone, role, created_at, status
+      `SELECT id, full_name, email, phone, role, created_at
        FROM users
        WHERE id = $1`,
       [req.params.id]
@@ -153,31 +153,10 @@ const getUserById = async (req, res, next) => {
 // @access  Private/Admin
 const updateUserStatus = async (req, res, next) => {
   try {
-    const { status } = req.body;
-
-    if (status !== 'active' && status !== 'inactive') {
-      res.status(400);
-      throw new Error('Invalid status');
-    }
-
-    const result = await db.query(
-      `UPDATE users
-       SET status = $1
-       WHERE id = $2
-       RETURNING id, full_name, status`,
-      [status, req.params.id]
-    );
-
-    if (result.rows.length > 0) {
-      res.json({
-        success: true,
-        message: 'User status updated',
-        data: result.rows[0]
-      });
-    } else {
-      res.status(404);
-      throw new Error('User not found');
-    }
+    return res.status(501).json({
+      success: false,
+      message: 'User status management is not configured yet.'
+    });
   } catch (error) {
     next(error);
   }

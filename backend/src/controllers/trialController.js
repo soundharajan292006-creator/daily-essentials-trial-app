@@ -5,32 +5,55 @@ const db = require('../config/db');
 // @access  Private
 const createTrialRequest = async (req, res, next) => {
   try {
-    const { product_id, quantity, trial_price, delivery_address_id } = req.body;
-    
-    if (quantity < 1) {
+    const productId = Number(req.body.product_id);
+    const quantity = Number(req.body.quantity ?? 1);
+
+    if (!Number.isInteger(productId) || productId < 1) {
       res.status(400);
-      throw new Error('Invalid quantity');
+      throw new Error('Invalid product ID');
     }
 
-    const checkProduct = await db.query('SELECT * FROM products WHERE id = $1', [product_id]);
-    if(checkProduct.rows.length === 0) {
-        res.status(404);
-        throw new Error('Product not found');
+    // Current trial_requests schema stores one product per request.
+    if (!Number.isInteger(quantity) || quantity !== 1) {
+      res.status(400);
+      throw new Error('Only one product per trial request is supported');
     }
-    
-    if(checkProduct.rows[0].trial_stock < quantity) {
-         res.status(400);
-         throw new Error('Not enough trial stock');
+
+    const productResult = await db.query(
+      `SELECT product_id, product_name, trial_stock, is_trial_available
+       FROM products
+       WHERE product_id = $1`,
+      [productId]
+    );
+
+    const product = productResult.rows[0];
+
+    if (!product) {
+      res.status(404);
+      throw new Error('Product not found');
+    }
+
+    if (!product.is_trial_available) {
+      res.status(400);
+      throw new Error('Trial is not available for this product');
+    }
+
+    if (Number(product.trial_stock || 0) < 1) {
+      res.status(400);
+      throw new Error('Not enough trial stock');
     }
 
     const result = await db.query(
-      `INSERT INTO trial_requests (user_id, product_id, quantity, trial_price, delivery_address_id, status) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *`,
-      [req.user.id, product_id, quantity, trial_price, delivery_address_id, 'pending']
+      `INSERT INTO trial_requests
+        (user_id, product_id, status)
+       VALUES ($1, $2, $3)
+       RETURNING trial_id, user_id, product_id, status, requested_at`,
+      [req.user.id, productId, 'pending']
     );
 
     res.status(201).json({
       success: true,
-      message: 'Trial request created',
+      message: 'Trial request created successfully',
       data: result.rows[0]
     });
   } catch (error) {
@@ -43,7 +66,26 @@ const createTrialRequest = async (req, res, next) => {
 // @access  Private
 const getMyTrialRequests = async (req, res, next) => {
   try {
-    const result = await db.query('SELECT * FROM trial_requests WHERE user_id = $1 ORDER BY created_at DESC', [req.user.id]);
+    const result = await db.query(
+      `SELECT
+         tr.trial_id,
+         tr.user_id,
+         tr.product_id,
+         tr.status,
+         tr.requested_at,
+         tr.requested_at AS created_at,
+         p.product_name,
+         p.brand,
+         p.image_url,
+         p.trial_price
+       FROM trial_requests tr
+       LEFT JOIN products p
+         ON p.product_id = tr.product_id
+       WHERE tr.user_id = $1
+       ORDER BY tr.requested_at DESC, tr.trial_id DESC`,
+      [req.user.id]
+    );
+
     res.json({
       success: true,
       data: result.rows
@@ -58,7 +100,24 @@ const getMyTrialRequests = async (req, res, next) => {
 // @access  Private/Admin
 const getAllTrialRequests = async (req, res, next) => {
   try {
-    const result = await db.query('SELECT * FROM trial_requests ORDER BY created_at DESC');
+    const result = await db.query(
+      `SELECT
+         tr.trial_id,
+         tr.user_id,
+         tr.product_id,
+         tr.status,
+         tr.requested_at,
+         tr.requested_at AS created_at,
+         p.product_name,
+         u.full_name AS user_name
+       FROM trial_requests tr
+       LEFT JOIN products p
+         ON p.product_id = tr.product_id
+       LEFT JOIN users u
+         ON u.id = tr.user_id
+       ORDER BY tr.requested_at DESC, tr.trial_id DESC`
+    );
+
     res.json({
       success: true,
       data: result.rows
@@ -73,27 +132,44 @@ const getAllTrialRequests = async (req, res, next) => {
 // @access  Private/Admin
 const updateTrialStatus = async (req, res, next) => {
   try {
+    const trialId = Number(req.params.id);
     const { status } = req.body;
-    const allowedStatuses = ['pending', 'approved', 'packed', 'shipped', 'delivered', 'rejected'];
-    
-    if(!allowedStatuses.includes(status)) {
-        res.status(400);
-        throw new Error('Invalid status');
+
+    const allowedStatuses = [
+      'pending',
+      'approved',
+      'packed',
+      'shipped',
+      'delivered',
+      'rejected'
+    ];
+
+    if (!Number.isInteger(trialId) || trialId < 1) {
+      res.status(400);
+      throw new Error('Invalid trial request ID');
+    }
+
+    if (!allowedStatuses.includes(status)) {
+      res.status(400);
+      throw new Error('Invalid trial request status');
     }
 
     const result = await db.query(
-      `UPDATE trial_requests SET status = $1 WHERE id = $2 RETURNING *`,
-      [status, req.params.id]
+      `UPDATE trial_requests
+       SET status = $1
+       WHERE trial_id = $2
+       RETURNING trial_id, user_id, product_id, status, requested_at`,
+      [status, trialId]
     );
 
-    if(result.rows.length === 0) {
-        res.status(404);
-        throw new Error('Trial request not found');
+    if (result.rows.length === 0) {
+      res.status(404);
+      throw new Error('Trial request not found');
     }
 
     res.json({
       success: true,
-      message: 'Trial request status updated',
+      message: 'Trial request status updated successfully',
       data: result.rows[0]
     });
   } catch (error) {
@@ -105,5 +181,5 @@ module.exports = {
   createTrialRequest,
   getMyTrialRequests,
   getAllTrialRequests,
-  updateTrialStatus,
+  updateTrialStatus
 };
